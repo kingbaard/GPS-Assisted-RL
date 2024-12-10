@@ -13,6 +13,7 @@ class VillageSafeEnv(gym.Env):
     metadata = {
         "render_modes": ["human", "rgb_array"],
         "render_fps": 4,
+        "debug": False,
         "goal_states": {"no-dragon": True, "no-fire": False, "has-sword": False},} # Will be used to train indiviual actions for GPS-assisted agent
 
     def __init__(self, render_mode=None, control_mode=None):
@@ -160,14 +161,14 @@ class VillageSafeEnv(gym.Env):
     def _action_check(self, location):
         # Check if action will give agent sword
         if np.array_equal(location, self.sword_location):
-            print("Agent picked up sword")
+            self._print_debug("Agent picked up sword")
             self.has_sword = 1
             self.map[self.sword_location[0]][self.sword_location[1]].object = GameObject.EMPTY
             self.sword_location = (-1, -1)
 
         # Check if action will kill agent
         if np.array_equal(location, self.dragon_location) and self.has_sword == 0:
-            print("Agent tried to fight dragon without a sword")
+            self._print_debug("Agent tried to fight dragon without a sword")
             self._agent_location = (-1, -1)
             self.agent_dead = True
 
@@ -181,13 +182,13 @@ class VillageSafeEnv(gym.Env):
 
         # TODO: Consider making ocean kill 
         if self.map[tuple(location)[0]][tuple(location)[1]].terrain == Terrain.OCEAN:
-            print("Agent died by walking into ocean")
+            self._print_debug("Agent died by walking into ocean")
             self._agent_location = (-1, -1)
             self.agent_dead = True
 
         # Check if action will kill dragon
         if np.array_equal(tuple(location), self.dragon_location) and self.has_sword == 1:
-            print("Agent killed dragon!")
+            self._print_debug("Agent killed dragon!")
             self.dragon_location = (-1, -1)
             self.map[self.dragon_location[0]][self.dragon_location[1]].object = GameObject.EMPTY
 
@@ -202,16 +203,19 @@ class VillageSafeEnv(gym.Env):
 
     def _calc_reward(self):
         # Large reward for accomplishing goal state
+        re_reward = 0
         if self._goal_state_achived():
-            return 1000
+            re_reward += 1000
 
-        # Small reward for moving towards current objective
+        # TODO: For non-GPS agent, small reward for accomplishing sub-goal state
 
         # TODO: Small penalty for moving into impassable terrain
-
+        
         # Penalty for death
         if self.agent_dead:
-            return -100
+            re_reward -= 1000
+
+        return re_reward
 
     def _load_sprites(self):
         # Load sprites
@@ -227,6 +231,7 @@ class VillageSafeEnv(gym.Env):
         self._mermaid_sprite = pygame.image.load(
             os.path.join(os.path.dirname(__file__), "static/Mermaid.png")
         )
+
     
 
     def _render_frame(self):
@@ -387,6 +392,9 @@ class VillageSafeEnv(gym.Env):
                 np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
             )
         
+    def _print_debug(self, message):
+        if self.metadata["debug"]:
+            print(message)
 
     def close(self):
         if self.window is not None:
