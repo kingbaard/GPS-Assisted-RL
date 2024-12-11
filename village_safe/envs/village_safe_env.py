@@ -1,7 +1,7 @@
 import sys
 import os
 
-from .env_enums import Actions, Zone, Terrain, GameObject
+from .env_enums import Actions, Zone, Terrain, GameObject, ObservationMap, ObjectiveState
 import gymnasium as gym
 from gymnasium import spaces
 import pygame
@@ -13,10 +13,9 @@ class VillageSafeEnv(gym.Env):
     metadata = {
         "render_modes": ["human", "rgb_array"],
         "render_fps": 4,
-        "debug": False,
         "goal_states": {"no-dragon": True, "no-fire": False, "has-sword": False},} # Will be used to train indiviual actions for GPS-assisted agent
 
-    def __init__(self, render_mode=None, control_mode=None):
+    def __init__(self, render_mode=None, control_mode=None, print={"actions": False, "rewards": False}):
         self.size = 30  # The size of the square grid
         self.window_size = 512  # The size of the PyGame window
         self.world_builder = WorldBuilder(self.size, 0)
@@ -26,7 +25,19 @@ class VillageSafeEnv(gym.Env):
         self.has_sword = 0
         self.agent_dead = False
         self.goal_states = self.metadata["goal_states"]
+        self.print = print
+
         self.current_objective = None # Will be determined by GPS
+        self.objective_states = {
+                                "no-fire": ObjectiveState.NOT_REACHED,
+                                "has-sword": ObjectiveState.NOT_REACHED,
+                                "no-dragon": ObjectiveState.NOT_REACHED,
+                                }
+        self.steps_since_completion = {
+                                "no-fire": 0,
+                                "has-sword": 0,
+                                "no-dragon": 0,
+                                }
 
 
         # Observations are dictionaries with the agent's and the target's location.
@@ -34,12 +45,12 @@ class VillageSafeEnv(gym.Env):
         # i.e. MultiDiscrete([size, size]).
         self.observation_space = spaces.Dict(
             {
-                "agent": spaces.Box(0, self.size - 1, shape=(2,), dtype=int),
-                "sword": spaces.Box(0, self.size - 1, shape=(2,), dtype=int),
-                "fire": spaces.Box(low=0, high=self.size - 1, shape=(15, 2), dtype=int),
-                "has-sword": spaces.Discrete(2), # 0: not in inventory, 1: in inventory
-                "dragon": spaces.Box(0, self.size - 1, shape=(2,), dtype=int),
-                # TODO: add other entities
+                "agent_loc": spaces.Box(0, self.size - 1, shape=(2,), dtype=int),
+                "sword_loc": spaces.Box(-1, self.size - 1, shape=(2,), dtype=int),
+                "dragon_loc": spaces.Box(-1, self.size - 1, shape=(2,), dtype=int),
+                "mermaid_loc": spaces.Box(-1, self.size - 1, shape=(2,), dtype=int),
+                "object_map": spaces.Box(0, 5, shape=(self.size, self.size), dtype=int),
+                "has-sword": spaces.Discrete(2), # 0 if agent does not have sword, 1 if agent has sword  
             }
         )
 
@@ -76,15 +87,36 @@ class VillageSafeEnv(gym.Env):
         """
         self.window = None
         self.clock = None
-
+   
+    # "agent_loc": spaces.Box(0, self.size - 1, shape=(2,), dtype=int),
+    # "sword_loc": spaces.Box(0, self.size - 1, shape=(2,), dtype=int),
+    # "dragon_loc": spaces.Box(0, self.size - 1, shape=(2,), dtype=int),
+    # "mermaid_loc": spaces.Box(0, self.size - 1, shape=(2,), dtype=int),
+    # "terrain_map": spaces.Box(0, high=self.size - 1, shape=(self.shape**2,), dtype=int),
+    # "has-sword": spaces.Discrete(2), # 0 if agent does not have sword, 1 if agent has sword  
     def _get_obs(self):
+        object_map = np.zeros((self.size, self.size)).astype(np.int32)
+        for i in range(self.size):
+            for j in range(self.size):
+                if self.map[i][j].object == GameObject.FIRE:
+                    object_map[i][j] = ObservationMap.FIRE.value
+                elif self.map[i][j].object == GameObject.SWORD:
+                    object_map[i][j] = ObservationMap.SWORD.value
+                elif self.map[i][j].object == GameObject.ROCK:
+                    object_map[i][j] = ObservationMap.ROCK.value
+                elif self.map[i][j].terrain == Terrain.OCEAN:
+                    object_map[i][j] = ObservationMap.WATER.value
+                else:
+                    object_map[i][j] = ObservationMap.NOTHING.value
+
         return {
-            "agent": self._agent_location,
-            "fire": self.fire_coords,
-            "sword": self.sword_location,
+            "agent_loc": np.array(self._agent_location).astype(np.int32),
+            "sword_loc": np.array(self.sword_location).astype(np.int32),
+            "mermaid_loc": np.array(self.mermaid_location).astype(np.int32), 
+            "dragon_loc": np.array(self.dragon_location).astype(np.int32),
+            "object_map": object_map,
             "has-sword": self.has_sword,
-            "dragon": self.dragon_location,
-                }
+        }
 
     def _get_info(self):
         return {
@@ -106,30 +138,46 @@ class VillageSafeEnv(gym.Env):
         #     )
         self.world_builder.generate_world()
         self.map = self.world_builder.map
+        self.mermaid_location, self.sword_location, self.dragon_location, self.fire_coords = self.world_builder.return_object_coords()
+        self.has_sword = 0
+        self.agent_dead = False
+        self.goal_states = self.metadata["goal_states"]
         observation = self._get_obs()
         info = self._get_info()
 
         if self.render_mode == "human":
             self._render_frame()
 
+
+        self.objective_states = {
+                                "no-fire": ObjectiveState.NOT_REACHED,
+                                "has-sword": ObjectiveState.NOT_REACHED,
+                                "no-dragon": ObjectiveState.NOT_REACHED,
+                                }
+        self.steps_since_completion = {
+                                "no-fire": 0,
+                                "has-sword": 0,
+                                "no-dragon": 0,
+                                }
+
+
         return observation, info
 
     def step(self, action):
-        did_win = False
-        # Map the action (element of {0,1,2,3}) to the direction we walk in
         direction = self._action_to_direction[action]
-        # We use `np.clip` to make sure we don't leave the grid
+
+        # ensure agent doesnt walk out of bounds
         prospective_location = np.clip(
             self._agent_location + direction, 0, self.size - 1
         )
-
-        # Check if action will cause effect
-        self._action_check(prospective_location)
+        valid_action = self._action_check(prospective_location)
         did_win = self._goal_state_achived()
+        self._update_objective_state()
         
-        self._agent_location = prospective_location
+        if valid_action:
+            self._agent_location = prospective_location
 
-        reward = self._calc_reward()
+        reward = self._calc_reward(valid_action)
         terminated = self.agent_dead or did_win
         observation = self._get_obs()
         info = self._get_info()
@@ -142,6 +190,21 @@ class VillageSafeEnv(gym.Env):
     def render(self):
         if self.render_mode == "rgb_array":
             return self._render_frame()
+        
+    def _update_objective_state(self):
+        for objective in self.objective_states.keys():
+            if self.objective_states[objective] == ObjectiveState.REACHED_PAST:
+                self.steps_since_completion[objective] += 1
+                continue
+            if self.objective_states[objective] == ObjectiveState.REACHED_THIS_FRAME:
+                self.objective_states[objective] = ObjectiveState.REACHED_PAST
+                continue
+            if objective == "no-dragon" and self.dragon_location == (-1, -1):
+                self.objective_states["no-dragon"] = ObjectiveState.REACHED_THIS_FRAME
+            elif objective == "no-fire" and len(self.fire_coords) == 0:
+                self.objective_states["no-fire"] = ObjectiveState.REACHED_THIS_FRAME
+            elif objective == "has-sword" and self.has_sword == 1:
+                self.objective_states["has-sword"] = ObjectiveState.REACHED_THIS_FRAME
 
     def _goal_state_achived(self):
         active_goal_states = {goal_state: False in self.goal_states for goal_state in self.goal_states if self.goal_states[goal_state]}
@@ -157,65 +220,109 @@ class VillageSafeEnv(gym.Env):
 
         if False not in active_goal_states.values():
             return True
+        return False
 
     def _action_check(self, location):
+        # check if action will move agent into impassable terrain
+        if self.map[location[0]][location[1]].object == GameObject.ROCK:
+            self._print_actions_debug("Agent tried to walk into rock")
+            return False
+        
+        # check if action will move agent out of bounds
+        if np.array_equal(location, self._agent_location):
+            return False
+        # if location[0] < 0 or location[0] >= self.size or location[1] < 0 or location[1] >= self.size:
+        
         # Check if action will give agent sword
         if np.array_equal(location, self.sword_location):
-            self._print_debug("Agent picked up sword")
+            self._print_actions_debug("Agent picked up sword")
             self.has_sword = 1
             self.map[self.sword_location[0]][self.sword_location[1]].object = GameObject.EMPTY
             self.sword_location = (-1, -1)
 
         # Check if action will kill agent
         if np.array_equal(location, self.dragon_location) and self.has_sword == 0:
-            self._print_debug("Agent tried to fight dragon without a sword")
+            self._print_actions_debug("Agent tried to fight dragon without a sword")
             self._agent_location = (-1, -1)
             self.agent_dead = True
-
+        
         # print(type(tuple(location)[0]))
         # fire_coords_array = np.array(self.fire_coords).astype(np.int32)
         for coord in self.fire_coords:
             if np.array_equal(tuple(location), coord):
-                print("Agent died by walking into fire")
+                self._print_actions_debug("Agent died by walking into fire")
                 self._agent_location = (-1, -1)
                 self.agent_dead = True
-
-        # TODO: Consider making ocean kill 
+        
+        # Player will die if they walk into ocean 
         if self.map[tuple(location)[0]][tuple(location)[1]].terrain == Terrain.OCEAN:
-            self._print_debug("Agent died by walking into ocean")
+            self._print_actions_debug("Agent died by walking into ocean")
             self._agent_location = (-1, -1)
             self.agent_dead = True
 
         # Check if action will kill dragon
         if np.array_equal(tuple(location), self.dragon_location) and self.has_sword == 1:
-            self._print_debug("Agent killed dragon!")
+            self._print_actions_debug("Agent killed dragon!")
             self.dragon_location = (-1, -1)
             self.map[self.dragon_location[0]][self.dragon_location[1]].object = GameObject.EMPTY
 
         # Check if action will kill fire
         if tuple(location) == self.mermaid_location:
-            print("Agent talked to mermaid, she made it rain to put out the fire")
+            self._print_actions_debug("Agent talked to mermaid, she made it rain to put out the fire")
             for coord in self.fire_coords:
                 self.map[coord[0]][coord[1]].object = GameObject.EMPTY
             self.fire_coords = []
+        return True
 
-        # Check if action will win game
-
-    def _calc_reward(self):
+    def _calc_reward(self, valid_action):
         # Large reward for accomplishing goal state
         re_reward = 0
+
         if self._goal_state_achived():
-            re_reward += 1000
-
+            re_reward += 100
+        
         # TODO: For non-GPS agent, small reward for accomplishing sub-goal state
+        # reward for putting out fire
+        if self.objective_states["no-fire"] == ObjectiveState.REACHED_THIS_FRAME:
+            print("Giving reward for putting out fire")
+            re_reward += 50
+        elif self.objective_states["no-fire"] == ObjectiveState.REACHED_PAST:
+            re_reward += max(10 - self.steps_since_completion["no-fire"], 0)
 
-        # TODO: Small penalty for moving into impassable terrain
+        # reward for picking up sword
+        if self.objective_states["has-sword"] == ObjectiveState.REACHED_THIS_FRAME:
+            print("Giving reward for picking up sword")
+            re_reward += 50
+        elif self.objective_states["has-sword"] == ObjectiveState.REACHED_PAST:
+            re_reward += max(10 - self.steps_since_completion["has-sword"], 0)
+
+        # reward for killing dragon
+        if self.objective_states["no-dragon"] == ObjectiveState.REACHED_THIS_FRAME:
+            print("Giving reward for killing dragon")
+            re_reward += 50
+        elif self.objective_states["no-dragon"] == ObjectiveState.REACHED_PAST:
+            re_reward += max(10 - self.steps_since_completion["no-dragon"], 0)
+
+        # Small penalty for attempting to move into impassable terrain
+        if not valid_action:
+            re_reward -= 10
         
         # Penalty for death
         if self.agent_dead:
-            re_reward -= 1000
+            re_reward -= 50
 
+        # Normalize reward such that it is in the range [-1, 1]
+        # re_reward = np.clip(re_reward, -100, 100)
+        # reward_max = 100
+        # reward_min = -100
+        # re_reward = (re_reward - reward_min) / (reward_max - reward_min) * 2 - 1
+
+        # re_reward = round(re_reward, 5) # round to 5 decimal places to avoid floating point errors
+
+        if self.print["rewards"]:
+            print(f"Reward: {re_reward}")
         return re_reward
+
 
     def _load_sprites(self):
         # Load sprites
@@ -232,7 +339,6 @@ class VillageSafeEnv(gym.Env):
             os.path.join(os.path.dirname(__file__), "static/Mermaid.png")
         )
 
-    
 
     def _render_frame(self):
         if self.window is None and self.render_mode == "human":
@@ -255,6 +361,15 @@ class VillageSafeEnv(gym.Env):
                     pygame.draw.rect(
                         canvas,
                         (0, 0, 255),
+                        pygame.Rect(
+                            (i * pix_square_size, j * pix_square_size),
+                            (pix_square_size, pix_square_size),
+                        ),
+                    )
+                elif self.map[i][j].terrain == Terrain.BEACH:
+                    pygame.draw.rect(
+                        canvas,
+                        (173, 151, 42),
                         pygame.Rect(
                             (i * pix_square_size, j * pix_square_size),
                             (pix_square_size, pix_square_size),
@@ -294,34 +409,16 @@ class VillageSafeEnv(gym.Env):
                         sword_sprite_scaled,
                         (i * pix_square_size, j * pix_square_size),
                     )
-                # elif self.map[i][j] == Tiles.TREE_SAFE:
-                #     pygame.draw.rect(
-                #         canvas,
-                #         (0, 255, 0),
-                #         pygame.Rect(
-                #             (i * pix_square_size, j * pix_square_size),
-                #             (pix_square_size, pix_square_size),
-                #         ),
-                #     )
-                # elif self.map[i][j] == Tiles.DRAGON:
-                #     pygame.draw.rect(
-                #         canvas,
-                #         (255, 0, 255),
-                #         pygame.Rect(
-                #             (i * pix_square_size, j * pix_square_size),
-                #             (pix_square_size, pix_square_size),
-                #         ),
-                #     )
-                # elif self.map[i][j] == Tiles.SWORD:
-                #     pygame.draw.rect(
-                #         canvas,
-                #         (255, 255, 0),
-                #         pygame.Rect(
-                #             (i * pix_square_size, j * pix_square_size),
-                #             (pix_square_size, pix_square_size),
-                #         )
-                #     )
-
+                elif self.map[i][j].object == GameObject.ROCK:
+                    pygame.draw.rect(
+                        canvas,
+                        (200, 200, 200),
+                        pygame.Rect(
+                            (i * pix_square_size, j * pix_square_size),
+                            (pix_square_size, pix_square_size),
+                        ),
+                    )
+            
 
         # Draw dragon
         dragon_sprite_scaled = pygame.transform.scale(self._dragon_sprite, (pix_square_size, pix_square_size))
@@ -392,8 +489,8 @@ class VillageSafeEnv(gym.Env):
                 np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
             )
         
-    def _print_debug(self, message):
-        if self.metadata["debug"]:
+    def _print_actions_debug(self, message):
+        if self.print["actions"]:
             print(message)
 
     def close(self):

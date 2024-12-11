@@ -175,4 +175,8 @@ poetry.toml
 # LSP config files
 pyrightconfig.json
 
-# End of https://www.toptal.com/developers/gitignore/api/python
+village_safe_tensorboard/
+PPO_train_history.csv
+hyperparameters_record.csv
+*.zip
+notes.txt

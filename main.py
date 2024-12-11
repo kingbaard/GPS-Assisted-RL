@@ -1,7 +1,7 @@
 import gymnasium
 import village_safe
 
-env = gymnasium.make("village_safe/VillageSafe-v0", render_mode="human")
+env = gymnasium.make("village_safe/VillageSafe-v0", render_mode="human", print={"actions": True, "rewards": True})
 
 for episode in range(10):
     state, _ = env.reset()

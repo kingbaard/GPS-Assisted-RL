@@ -7,6 +7,7 @@ class WorldBuilder:
         self.size = size
         self.seed = seed
         self.map = [[Tile() for _ in range(size)] for _ in range(size)]
+        self.beach_tiles = []
         self.zones = {zone.name: Terrain.GRASSLAND for zone in Zone}
         
         self.forest_zone = None
@@ -24,6 +25,9 @@ class WorldBuilder:
         self.place_mermaid()
         self.place_sword()
         self.place_dragon()
+        self.place_rocks()
+
+        # print(f"Zones: {self.zones}")
 
     def generate_world(self):
         for zone in Zone:
@@ -39,6 +43,7 @@ class WorldBuilder:
                 self._populate_zone_tiles(zone_offset, Terrain.MOUNTAIN)
             else:
                 self._populate_zone_tiles(zone_offset, Terrain.GRASSLAND)
+        self._populate_beach_tiles()
 
     def return_object_coords(self):
         return self.mermaid_coords, self.sword_coords, self.dragon_coords, self.fire_coords
@@ -72,7 +77,7 @@ class WorldBuilder:
             else:
                 self.zones[Zone.SW.name] = Terrain.OCEAN
                 self.zones[Zone.S.name] = Terrain.OCEAN
-                self.zones[Zone.SW.name] = Terrain.OCEAN
+                self.zones[Zone.SE.name] = Terrain.OCEAN
                 self.ocean_zones = [Zone.SW.name, Zone.S.name, Zone.SE.name]
 
         # Generate Forest Zone
@@ -114,29 +119,78 @@ class WorldBuilder:
 
 
     def place_mermaid(self):
-        buffer = 2
-        mountain_offset = self.mountain_zone.value
-        coord_in_mountain = (np.random.randint(buffer, self.size//3 - buffer), np.random.randint(buffer, self.size//3 - buffer))
+        # Place mermain on beach tile
+        self.mermaid_coords = self.beach_tiles[np.random.randint(len(self.beach_tiles))]
+        self.map[self.mermaid_coords[0]][self.mermaid_coords[1]].object = GameObject.MERMAID
 
-        map_coordinates = (mountain_offset[0] + coord_in_mountain[0], mountain_offset[1] + coord_in_mountain[1])
-        self.mermaid_coords = map_coordinates
-        self.map[map_coordinates[0]][map_coordinates[1]].object = GameObject.MERMAID
+    def place_rocks(self):
+        # randomly place rocks everywhere except village and ocean, and on sword, dragon or mermaid
+        for row in range(self.size):
+            for col in range(self.size):
+                if self.map[row][col].terrain != Terrain.VILLAGE and self.map[row][col].terrain != Terrain.OCEAN and self.map[row][col].object == GameObject.EMPTY:
+                    if np.random.rand() < 0.05:
+                        self.map[row][col].object = GameObject.ROCK
+
 
     def get_random_valid_zone(self, invalid_zones=None):
         if invalid_zones is None:
             valid_zones = [zone.name for zone in Zone if self.zones[zone.name] == Terrain.GRASSLAND]
         else:
             valid_zones = [zone.name for zone in Zone if self.zones[zone.name] not in invalid_zones]
-        print(valid_zones)
+        # print(valid_zones)
         return valid_zones[np.random.choice(len(valid_zones))]
     
     def get_random_zone_tile(self, zone_coords):
         col_range = range(zone_coords[0] * 10, zone_coords[0] * 10 + 10)
         row_range = range(zone_coords[1] * 10, zone_coords[1] * 10 + 10)
-        valid_tiles = [(x, y) for x in row_range for y in col_range if map[x][y] == Tiles.EMPTY]
+        valid_tiles = [(x, y) for x in row_range for y in col_range if map[x][y] == Tile.EMPTY]
         return valid_tiles[np.random.randint(len(valid_tiles))]
 
     def _populate_zone_tiles(self, zone_offset, terrain):
         for row in range(zone_offset[0], zone_offset[0] + 10):
             for col in range(zone_offset[1], zone_offset[1] + 10):
                 self.map[row][col].terrain = terrain
+
+    def _populate_ocean_tiles(self, zone_offset):
+        for row in range(zone_offset[0], zone_offset[0] + 10):
+            for col in range(zone_offset[1], zone_offset[1] + 10):
+                self.map[row][col].terrain = Terrain.OCEAN
+
+    def _populate_beach_tiles(self):
+        # make all ocean tiles that are adjacent to land into beach tiles
+        if self.zones[Zone.N.name] == Terrain.OCEAN:
+            col_start = self.size // 3 - 1
+            col_end = self.size // 3
+            row_start = 0
+            row_end = self.size
+
+        elif self.zones[Zone.S.name] == Terrain.OCEAN:
+            col_start = (self.size // 3) * 2 
+            col_end = (self.size // 3) * 2 + 1
+            row_start = 0
+            row_end = self.size
+
+        elif self.zones[Zone.E.name] == Terrain.OCEAN:
+            col_start = 0
+            col_end = self.size
+            row_start = (self.size // 3) * 2 - 1
+            row_end = (self.size // 3) * 2
+
+        elif self.zones[Zone.W.name] == Terrain.OCEAN:
+            col_start = 0
+            col_end = self.size
+            row_start = self.size // 3 - 1 
+            row_end = self.size // 3
+
+        for row in range(row_start, row_end):
+            for col in range(col_start, col_end):
+                self.beach_tiles.append((row, col))
+                self.map[row][col].terrain = Terrain.BEACH
+
+    def _neighbor_terrain_check(self, row, col, terrain_type):
+        # checks to see if neighbors of a tile contain a certain terrain type
+        for i in range(-1, 2):
+            for j in range(-1, 2):
+                if row + i >= 0 and row + i < self.size and col + j >= 0 and col + j < self.size:
+                    if self.map[row + i][col + j].terrain == terrain_type:
+                        return True

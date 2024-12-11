@@ -6,7 +6,7 @@ import village_safe
 class HumanControl:
 
     def __init__(self):
-        self.env = gymnasium.make("village_safe/VillageSafe-v0", render_mode="human")
+        self.env = gymnasium.make("village_safe/VillageSafe-v0", render_mode="human", print={"actions": True, "rewards": True})
         self.env.reset()
         self.running = True
 
@@ -17,13 +17,13 @@ class HumanControl:
                     self.handle_input(event)
                 elif event.type == pygame.QUIT:
                     self.running = False
-                    self.close()
+                    # self.close()
 
             # Render the environment after every interaction
             self.env.render()
             if self.env.agent_dead:
                 self.running = False
-                self.close()
+                # self.close()
 
     def step(self, action):
         state, reward, done, trunc, info = self.env.step(action)
