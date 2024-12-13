@@ -210,19 +210,21 @@ class VillageSafeEnv(gym.Env):
             if self.objective_states[objective] == ObjectiveStatus.REACHED_PAST:
                 self.steps_since_completion[objective] += 1
                 continue
+            # Set new current objective
             if self.objective_states[objective] == ObjectiveStatus.REACHED_THIS_FRAME:
                 self.objective_states[objective] = ObjectiveStatus.REACHED_PAST
-                if objective == "no-fire":
+                if objective == GoalState.NO_DRAGON:
                     self.goal_state = GoalState.HAS_SWORD
                 elif objective == "has-sword":
                     self.goal_state = GoalState.NO_DRAGON
                 continue
             if objective == "no-dragon" and self.dragon_location == (-1, -1):
                 self.objective_states["no-dragon"] = ObjectiveStatus.REACHED_THIS_FRAME
-            elif objective == "no-fire" and len(self.fire_coords) == 0:
-                self.objective_states["no-fire"] = ObjectiveStatus.REACHED_THIS_FRAME
             elif objective == "has-sword" and self.has_sword == 1:
                 self.objective_states["has-sword"] = ObjectiveStatus.REACHED_THIS_FRAME
+            elif objective == "no-fire" and len(self.fire_coords) == 0:
+                self.objective_states["no-fire"] = ObjectiveStatus.REACHED_THIS_FRAME
+            elif objective == 
 
 
     def _goal_state_achived(self):
@@ -365,11 +367,11 @@ class VillageSafeEnv(gym.Env):
 
     def _reward_objective_proximity(self, prospective_location):
         objective_location = None
-        if self.goal_state == GoalState.NO_FIRE:
+        if self.current_objective == GoalState.NO_FIRE:
             objective_location = self.mermaid_location
-        elif self.goal_state == GoalState.HAS_SWORD:
+        elif self.current_objective == GoalState.HAS_SWORD:
             objective_location = self.sword_location
-        elif self.goal_state == GoalState.NO_DRAGON:
+        elif self.current_objective == GoalState.NO_DRAGON:
             objective_location = self.dragon_location
             # reward moving towards dragon
         past_distance = np.linalg.norm(np.array(self._agent_location) - np.array(objective_location)) 
