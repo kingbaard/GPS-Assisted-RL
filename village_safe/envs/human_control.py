@@ -1,12 +1,19 @@
 import gymnasium
+import numpy as np
 import pygame
-from env_enums import Actions
+from env_enums import Actions, StartState, GoalState
 import village_safe
 
 class HumanControl:
 
     def __init__(self):
-        self.env = gymnasium.make("village_safe/VillageSafe-v0", render_mode="human", print={"actions": True, "rewards": True})
+        start_state = np.random.choice(list(StartState))
+        self.env = gymnasium.make(
+            "village_safe/VillageSafe-v0", 
+            render_mode="human",
+            start_state = StartState.MERMAID,
+            print={"actions": True, "rewards": False}
+            )
         self.env.reset()
         self.running = True
 

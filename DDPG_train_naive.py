@@ -14,27 +14,27 @@ from stable_baselines3.a2c.policies import MultiInputPolicy
 larger_arc = [dict(pi=[256, 256], vf=[256, 256])]
 
 def make_env():
-    env = gymnasium.make("village_safe/VillageSafe-v0", print={"actions": True, "rewards": False})
-    env = TimeLimit(env, max_episode_steps=100) 
+    env = gymnasium.make("village_safe/VillageSafe-v0")
+    env = TimeLimit(env, max_episode_steps=750) 
 
     return env
 
-vec_env = make_vec_env(make_env, n_envs=4)
+vec_env = make_vec_env(make_env, n_envs=300)
 
 # Use the vec_env wrapper to normalize rewards
-vec_env = VecNormalize(vec_env, norm_obs=False, norm_reward=True, clip_obs=10.0)
+# vec_env = VecNormalize(vec_env, norm_obs=False, norm_reward=True, clip_obs=10.0)
 
 run_id = datetime.now().strftime('%m%d_%H%M%S')
 ppo_hyperparameters = {
     # "policy": "MultiInputPolicy",
-    "n_epochs": 5,
+    "n_epochs": 10,
     "batch_size": 256,
     "learning_rate": 3e-4,
-    "n_steps": 1024,
-    "gamma": 0.95,
+    "n_steps": 512,
+    "gamma": 0.99,
     "gae_lambda": 0.95,
-    "clip_range": 0.25,
-    "ent_coef": 0.1,
+    "clip_range": 0.2,
+    "ent_coef": 0.03,
     "vf_coef": 0.6,
     "max_grad_norm": 0.5,
 }
@@ -51,17 +51,11 @@ sac_hyperparameters = {
         'verbose': 1,
     }
 
-model = PPO(MultiInputPolicy,
+model = SAC(MultiInputPolicy,
             vec_env,
-            tensorboard_log=f"./village_safe_tensorboard/PPO_{run_id}_lr_{ppo_hyperparameters['learning_rate']}_bs_{ppo_hyperparameters['batch_size']}",
-            **ppo_hyperparameters
+            tensorboard_log=f"./village_safe_tensorboard/SAC_{run_id}_lr_{ppo_hyperparameters['learning_rate']}_bs_{ppo_hyperparameters['batch_size']}",
+            **sac_hyperparameters
             )
-
-# model = SAC(MultiInputPolicy,
-#             vec_env,
-#             tensorboard_log=f"./village_safe_tensorboard/SAC_{run_id}_lr_{ppo_hyperparameters['learning_rate']}_bs_{ppo_hyperparameters['batch_size']}",
-#             **sac_hyperparameters
-#             )
 
 ppo_hyperparameters["run_id"] = run_id
 
@@ -76,10 +70,11 @@ with open ("hyperparameters_record.csv", mode="a", newline="") as file:
     writer = csv.DictWriter(file, fieldnames=ppo_hyperparameters.keys())
     writer.writerow(ppo_hyperparameters)
 
-print("Training model")
-model.learn(total_timesteps=4e6)
 
-model.save(f"15x15_objectiveDistRewards_PPO_village_safe_{run_id}")
+print("Training model")
+model.learn(total_timesteps=1.5e6)
+
+model.save(f"SAC_village_safe_{run_id}")
 
 vec_env.close()
 
