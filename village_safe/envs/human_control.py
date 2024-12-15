@@ -11,8 +11,8 @@ class HumanControl:
         self.env = gymnasium.make(
             "village_safe/VillageSafe-v0", 
             render_mode="human",
-            start_state = StartState.MERMAID,
-            print={"actions": True, "rewards": False}
+            goal_states={GoalState.IN_BOAT.value: False, GoalState.NO_FIRE.value: True, GoalState.HAS_SWORD.value: True, GoalState.NO_DRAGON.value: True},
+            print={"actions": True, "rewards": True}
             )
         self.env.reset()
         self.running = True

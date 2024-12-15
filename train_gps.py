@@ -1,7 +1,9 @@
+import re
 import subprocess
 import csv
 from datetime import datetime
 import gymnasium
+import numpy as np
 from village_safe.envs.env_enums import StartState, GoalState
 import village_safe
 from stable_baselines3 import PPO
@@ -18,19 +20,32 @@ def run_gps(goal_state: str):
     for line in lines:
         if line.startswith("((START)"):
             return line
+        
+def interpret_gps(goal_string):
+    elements = re.findall(r'\((.*?)\)', goal_string)
+    elements = elements[1:]
+
+    return elements
 
 def make_env():
+    starting_state = np.randint(0, 4)
+    boat_objective, mermaid_objective, sword_objective = True
+    if starting_state >= 1:
+        boat_objective = False
+    if starting_state >= 2:
+        mermaid_objective = False
+    if starting_state >= 3:
+        sword_objective = False
+
     env = gymnasium.make(
         "village_safe/VillageSafe-v0", 
-        start_state = StartState.MERMAID,
-        goal_state = GoalState.IN_BOAT, 
-        print={"actions": True, "rewards": False}
+        goal_states={GoalState.IN_BOAT.value: boat_objective, GoalState.NO_FIRE.value: mermaid_objective, GoalState.HAS_SWORD.value: sword_objective, GoalState.NO_DRAGON.value: True},
         )
     env = TimeLimit(env, max_episode_steps=100) 
 
     return env
 
-vec_env = make_vec_env(make_env, n_envs=4)
+vec_env = make_vec_env(make_env, n_envs=8)
 run_id = datetime.now().strftime('%m%d_%H%M%S')
 ppo_hyperparameters = {
     # "policy": "MultiInputPolicy",
@@ -66,8 +81,8 @@ with open ("hyperparameters_record.csv", mode="a", newline="") as file:
     writer.writerow(ppo_hyperparameters)
 
 print("Training model")
-model.learn(total_timesteps=4e6)
+model.learn(total_timesteps=5e6)
 
-model.save(f"15x15_objectiveDistRewards_PPO_village_safe_{run_id}")
+model.save(f"15x15_objectiveDistRewards_PPO_beachMermaid_{run_id}")
 
 vec_env.close()

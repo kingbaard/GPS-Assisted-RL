@@ -4,13 +4,16 @@ if [ -z "$1" ]; then
 fi
 
 # Capture the goal state from the command-line argument
-GOAL_STATE=$1
+WORLD_STATE=$1
+GOAL_STATE=$2
 
 # Start Common Lisp and load the gps.lisp file
 pwd
 clisp <<EOF
 
 (load "GPS/gps.lisp")
+
+(defparameter *dragon-world* '($WORLD_STATE))
 
 (sleep 1)
 # Establish operators

@@ -28,8 +28,8 @@ class WorldBuilder:
         self.place_mermaid()
         self.place_sword()
         self.place_dragon()
-        self.place_rocks()
         self.place_boat()
+        self.place_rocks()
 
     def generate_world(self):
         for zone in Zone:
@@ -93,6 +93,10 @@ class WorldBuilder:
         self.mountain_zone = Zone[mountain_zone_name]
 
     def place_sword(self):
+        if self.start_state == StartState.DRAGON:
+            self.sword_coords = (-1, -1)
+            return
+        
         buffer = 2
         forest_offset = self.forest_zone.value
         coord_in_forest = (np.random.randint(buffer, self.size//3 - buffer), np.random.randint(buffer, self.size//3 - buffer))
@@ -101,6 +105,8 @@ class WorldBuilder:
         self.sword_coords = map_coordinates
         self.map[map_coordinates[0]][map_coordinates[1]].object = GameObject.SWORD
 
+        if self.start_state == StartState.SWORD:
+            return
         # surround sword with fire
         for row in range(map_coordinates[0] - 1, map_coordinates[0] + 2):
             for col in range(map_coordinates[1] - 1, map_coordinates[1] + 2):
@@ -144,7 +150,7 @@ class WorldBuilder:
         self.boat_coords = self.beach_tiles[np.random.randint(len(self.beach_tiles))]
         # self.map[self.boat_coords[0]][self.boat_coords[1]].object = GameObject.BOAT
         self.beach_tiles.remove(self.boat_coords)
-        print(f"Boat coords:{self.boat_coords}")
+        # print(f"Boat coords:{self.boat_coords}")
 
 
     def get_random_valid_zone(self, invalid_zones=None):

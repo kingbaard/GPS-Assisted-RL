@@ -13,43 +13,41 @@ class VillageSafeEnv(gym.Env):
     metadata = {
         "render_modes": ["human", "rgb_array"],
         "render_fps": 4,
-        "goal_state": GoalState.NO_DRAGON,} # Will be used to train indiviual actions for GPS-assisted agent
+        "goal_state": GoalState.NO_DRAGON,} # Will be used to train individual actions for GPS-assisted agent
 
     def __init__(
             self, 
             render_mode=None, 
-            start_state=StartState.BOAT, 
-            goal_states={GoalState.IN_BOAT: False, GoalState.NO_FIRE: False, GoalState.HAS_SWORD: False, GoalState.NO_DRAGON: True}, 
+            goal_states={GoalState.IN_BOAT.value: True, GoalState.NO_FIRE.value: True, GoalState.HAS_SWORD.value: True, GoalState.NO_DRAGON.value: True}, 
             control_mode=None,
             print={"actions": False, "rewards": False}
             ):
+        self.objective_statuses = {
+                                GoalState.IN_BOAT.value: ObjectiveStatus.NOT_REACHED,
+                                GoalState.NO_FIRE.value: ObjectiveStatus.NOT_REACHED,
+                                GoalState.HAS_SWORD.value: ObjectiveStatus.NOT_REACHED,
+                                GoalState.NO_DRAGON.value: ObjectiveStatus.NOT_REACHED,
+                                } # Determines whether the agent has completed the objective and whether it was just now or in the past
+        self.steps_since_completion = {
+                                GoalState.IN_BOAT.value: 0,
+                                GoalState.NO_FIRE.value: 0,
+                                GoalState.HAS_SWORD.value: 0,
+                                GoalState.NO_DRAGON.value: 0,
+                                }
+        
+        self.goal_states = goal_states # States needing to be completed to win game
+        self.current_objective = self._determine_objective() # What the agent should be currently working towards
+        self.start_state = self._determine_start_state() # Determines the initial state of the world
+
         self.size = 15  # The size of the square grid
-        self.window_size = 512  # The size of the PyGame window
-        self.world_builder = WorldBuilder(self.size, 0, start_state=start_state)
+        self.window_size = 512  
+        self.world_builder = WorldBuilder(self.size, 0, start_state=self.start_state)
         self.world_builder.generate_world()
         self.map = self.world_builder.map
         self.boat_location, self.mermaid_location, self.sword_location, self.dragon_location, self.fire_coords = self.world_builder.return_object_coords()
-        self.has_sword = 0
         self.agent_dead = False
         self.print = print
         self.in_boat = False
-
-        self.start_state = start_state
-        self.goal_states = goal_states
-        self.current_objective = self._determine_objective()
-
-        self.objective_states = {
-                                GoalState.IN_BOAT: ObjectiveStatus.NOT_REACHED,
-                                GoalState.NO_FIRE: ObjectiveStatus.NOT_REACHED,
-                                GoalState.HAS_SWORD: ObjectiveStatus.NOT_REACHED,
-                                GoalState.NO_DRAGON: ObjectiveStatus.NOT_REACHED,
-                                }
-        self.steps_since_completion = {
-                                GoalState.IN_BOAT: 0,
-                                GoalState.NO_FIRE: 0,
-                                GoalState.HAS_SWORD: 0,
-                                GoalState.NO_DRAGON: 0,
-                                }
 
         # Observations are dictionaries with the agent's and the target's location.
         # Each location is encoded as an element of {0, ..., `size`}^2,
@@ -57,7 +55,7 @@ class VillageSafeEnv(gym.Env):
         self.observation_space = spaces.Dict(
             {
                 "agent_loc": spaces.Box(0, self.size - 1, shape=(2,), dtype=int),
-                # "sword_loc": spaces.Box(-1, self.size - 1, shape=(2,), dtype=int),
+                "sword_loc": spaces.Box(-1, self.size - 1, shape=(2,), dtype=int),
                 "dragon_loc": spaces.Box(-1, self.size - 1, shape=(2,), dtype=int),
                 "mermaid_loc": spaces.Box(-1, self.size - 1, shape=(2,), dtype=int),
                 # "object_map": spaces.Box(0, 5, shape=(self.size, self.size), dtype=int), # 2d
@@ -87,7 +85,7 @@ class VillageSafeEnv(gym.Env):
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
 
-        if render_mode == "human":
+        if render_mode == "human" or render_mode == "rgb_array":
             # load sprites
             self._load_sprites()
 
@@ -113,25 +111,27 @@ class VillageSafeEnv(gym.Env):
                     object_map[i][j] = ObservationMap.NOTHING.value
         return {
             "agent_loc": np.array(self._agent_location).astype(np.int32),
-            # "sword_loc": np.array(self.sword_location).astype(np.int32),
+            "sword_loc": np.array(self.sword_location).astype(np.int32),
             "mermaid_loc": np.array(self.mermaid_location).astype(np.int32), 
             "dragon_loc": np.array(self.dragon_location).astype(np.int32),
             "object_map": object_map.flatten(),
             # "has-sword": self.has_sword,
         }
 
-    def _get_info(self):
+    def _get_info(self, did_win=False):
         return {
-        }
+            "did_win": did_win,
+            "current_objective": self.current_objective,
+            }
     
 
     def _randomize_world_state(self):
         random_state = np.random.choice(StartState.BOAT, StartState.MERMAID, StartState.SWORD, StartState.DRAGON)
 
         if random_state in [StartState.SWORD, StartState.DRAGON]:
-            self.objective_states["no-fire"] = ObjectiveStatus.REACHED_PAST
-        elif random_state == StartState.DRAGON:
-            self.objective_states["has-sword"] = ObjectiveStatus.REACHED_PAST
+            self.objective_statuses[GoalState.NO_FIRE.value] = ObjectiveStatus.REACHED_PAST
+        if random_state == StartState.DRAGON:
+            self.objective_statuses[GoalState.HAS_SWORD.value] = ObjectiveStatus.REACHED_PAST
         # TODO: more advanced
 
 
@@ -142,31 +142,39 @@ class VillageSafeEnv(gym.Env):
         # Choose the agent's location uniformly at random
         self._agent_location = self.np_random.integers(self.size // 3, self.size // 3 * 2, size=2, dtype=int)
 
-        self.world_builder.start_state = self.start_state
+        self.goal_states = self.goal_states # States needing to be completed to win game
+        self.current_objective = self._determine_objective() # What the agent should be currently working towards
+        self.start_state = self._determine_start_state() # Determines the initial state of the world
+
+        self.size = 15  # The size of the square grid
+        self.window_size = 512  
+        self.world_builder = WorldBuilder(self.size, 0, start_state=self.start_state)
         self.world_builder.generate_world()
         self.map = self.world_builder.map
         self.boat_location, self.mermaid_location, self.sword_location, self.dragon_location, self.fire_coords = self.world_builder.return_object_coords()
-        self.on_boat = False
-        self.has_sword = 0
         self.agent_dead = False
+        self.in_boat = False
+
+
+        self.objective_statuses = {
+                                GoalState.IN_BOAT.value: ObjectiveStatus.NOT_REACHED,
+                                GoalState.NO_FIRE.value: ObjectiveStatus.NOT_REACHED,
+                                GoalState.HAS_SWORD.value: ObjectiveStatus.NOT_REACHED,
+                                GoalState.NO_DRAGON.value: ObjectiveStatus.NOT_REACHED,
+                                } # Determines whether the agent has completed the objective and whether it was just now or in the past
+        self.steps_since_completion = {
+                                GoalState.IN_BOAT.value: 0,
+                                GoalState.NO_FIRE.value: 0,
+                                GoalState.HAS_SWORD.value: 0,
+                                GoalState.NO_DRAGON.value: 0,
+                                }
         observation = self._get_obs()
-        info = self._get_info()
+        info = self._get_info(did_win=False)
 
         self.current_objective = self._determine_objective()
 
-        if self.render_mode == "human":
+        if self.render_mode == "human" or self.render_mode == "rgb_array":
             self._render_frame()
-
-        self.objective_states = {
-                                "no-fire": ObjectiveStatus.NOT_REACHED,
-                                "has-sword": ObjectiveStatus.NOT_REACHED,
-                                "no-dragon": ObjectiveStatus.NOT_REACHED,
-                                }
-        self.steps_since_completion = {
-                                "no-fire": 0,
-                                "has-sword": 0,
-                                "no-dragon": 0,
-                                }
 
         return observation, info
 
@@ -180,7 +188,7 @@ class VillageSafeEnv(gym.Env):
         )
 
         valid_action = self._action_check(prospective_location)
-        did_win = self._goal_state_achived()
+        did_win = self._goal_state_achieved()
         self._update_objective_state()
         
         reward = self._calc_reward(valid_action, prospective_location)
@@ -193,7 +201,7 @@ class VillageSafeEnv(gym.Env):
 
         terminated = self.agent_dead or did_win
         observation = self._get_obs()
-        info = self._get_info()
+        info = self._get_info(did_win=did_win)
 
         if self.render_mode == "human":
             self._render_frame()
@@ -206,39 +214,51 @@ class VillageSafeEnv(gym.Env):
             return self._render_frame()
         
     def _update_objective_state(self):
-        for objective in self.objective_states.keys():
-            if self.objective_states[objective] == ObjectiveStatus.REACHED_PAST:
+        for objective in self.objective_statuses.keys():
+            if self.objective_statuses[objective] == ObjectiveStatus.REACHED_PAST:
                 self.steps_since_completion[objective] += 1
+                # if agent on boat and objective is mermaid, when agent leaves boat, objective is no longer reached
+                if objective == GoalState.IN_BOAT and not self.in_boat:
+                    self.objective_statuses[objective] = ObjectiveStatus.NOT_REACHED
+                    self.current_objective = GoalState.IN_BOAT 
                 continue
             # Set new current objective
-            if self.objective_states[objective] == ObjectiveStatus.REACHED_THIS_FRAME:
-                self.objective_states[objective] = ObjectiveStatus.REACHED_PAST
-                if objective == GoalState.NO_DRAGON:
-                    self.goal_state = GoalState.HAS_SWORD
-                elif objective == "has-sword":
-                    self.goal_state = GoalState.NO_DRAGON
-                continue
-            if objective == "no-dragon" and self.dragon_location == (-1, -1):
-                self.objective_states["no-dragon"] = ObjectiveStatus.REACHED_THIS_FRAME
-            elif objective == "has-sword" and self.has_sword == 1:
-                self.objective_states["has-sword"] = ObjectiveStatus.REACHED_THIS_FRAME
-            elif objective == "no-fire" and len(self.fire_coords) == 0:
-                self.objective_states["no-fire"] = ObjectiveStatus.REACHED_THIS_FRAME
-            elif objective == 
+            elif self.objective_statuses[objective] == ObjectiveStatus.REACHED_THIS_FRAME:
+                self.objective_statuses[objective] = ObjectiveStatus.REACHED_PAST
+                if objective == GoalState.HAS_SWORD:
+                    self.current_objective = GoalState.NO_DRAGON
+                elif objective == GoalState.NO_FIRE:
+                    self.current_objective = GoalState.HAS_SWORD
+                elif objective == GoalState.IN_BOAT:
+                    self.current_objective = GoalState.NO_FIRE
+            elif self.objective_statuses[objective] == ObjectiveStatus.NOT_REACHED:
+                if objective == GoalState.NO_DRAGON.value and self.dragon_location == (-1, -1):
+                    self.objective_statuses[GoalState.NO_DRAGON.value] = ObjectiveStatus.REACHED_THIS_FRAME
+                if objective == GoalState.HAS_SWORD.value and self.has_sword == 1:
+                    self.objective_statuses[GoalState.HAS_SWORD.value] = ObjectiveStatus.REACHED_THIS_FRAME
+                if objective == GoalState.NO_FIRE.value and len(self.fire_coords) == 0:
+                    self.objective_statuses[GoalState.NO_FIRE.value] = ObjectiveStatus.REACHED_THIS_FRAME
+                if objective == GoalState.IN_BOAT.value and self.in_boat:
+                    self.objective_statuses[GoalState.IN_BOAT.value] = ObjectiveStatus.REACHED_THIS_FRAME
 
+        self.current_objective = self._determine_objective()
+        # print(f"Objective statuses: {self.objective_statuses}")
 
-    def _goal_state_achived(self):
-        # active_goal_states = {state: False in state for state in self.objective_states if self.objective_states[state]}
+    def _goal_state_achieved(self):
+        win_progress = {state: False for state in self.goal_states if self.goal_states[state]}
+        # print(f"Goal states: {self.goal_states}")
+        # print(f"Win progress before: {win_progress}")
         
-        if GoalState.NO_DRAGON in self.goal_states and self.dragon_location == (-1, -1):
-            self.goal_states[GoalState.NO_DRAGON] = True
-        if GoalState.HAS_SWORD in self.goal_states and self.has_sword == 1:
-            self.goal_states[GoalState.HAS_SWORD] = True
-        if GoalState.NO_FIRE in self.goal_states and len(self.fire_coords) == 0:
-            self.goal_states[GoalState.NO_FIRE] = True
-        if GoalState.IN_BOAT in self.goal_states and (self.in_boat or len(self.fire_coords) == 0):
-            self.goal_states[GoalState.IN_BOAT] = True
-        if False not in self.goal_states.values():
+        if GoalState.NO_DRAGON.value in win_progress.keys() and self.dragon_location == (-1, -1):
+            win_progress[GoalState.NO_DRAGON.value] = True
+        if GoalState.HAS_SWORD.value in win_progress.keys() and self.has_sword == 1:
+            win_progress[GoalState.HAS_SWORD.value] = True
+        if GoalState.NO_FIRE.value in win_progress.keys() and len(self.fire_coords) == 0:
+            win_progress[GoalState.NO_FIRE.value] = True
+        if GoalState.IN_BOAT.value in win_progress.keys() and (self.in_boat or len(self.fire_coords) == 0):
+            win_progress[GoalState.IN_BOAT.value] = True
+        # print(f"Win progress after: {win_progress.values()}")
+        if False not in win_progress.values():
             return True
         return False
 
@@ -304,11 +324,11 @@ class VillageSafeEnv(gym.Env):
         return True
     
     def _determine_objective(self):
-        if self.goal_states[GoalState.IN_BOAT] and self.objective_states[GoalState.IN_BOAT] == ObjectiveStatus.NOT_REACHED:
+        if self.goal_states[GoalState.IN_BOAT.value] and self.objective_statuses[GoalState.IN_BOAT.value] == ObjectiveStatus.NOT_REACHED:
             return GoalState.IN_BOAT
-        elif self.goal_states[GoalState.NO_FIRE] and self.objective_states[GoalState.NO_FIRE] == ObjectiveStatus.NOT_REACHED:
+        elif self.goal_states[GoalState.NO_FIRE.value] and self.objective_statuses[GoalState.NO_FIRE.value] == ObjectiveStatus.NOT_REACHED:
             return GoalState.NO_FIRE
-        elif self.goal_states[GoalState.HAS_SWORD] and self.objective_states[GoalState.HAS_SWORD] == ObjectiveStatus.NOT_REACHED:
+        elif self.goal_states[GoalState.HAS_SWORD.value] and self.objective_statuses[GoalState.HAS_SWORD.value] == ObjectiveStatus.NOT_REACHED:
             return GoalState.HAS_SWORD
         return GoalState.NO_DRAGON
 
@@ -316,34 +336,38 @@ class VillageSafeEnv(gym.Env):
         re_reward = 0
 
         # Large reward for accomplishing goal state
-        if self._goal_state_achived():
+        if self._goal_state_achieved():
             re_reward += 100
 
         # Small reward for moving towards current objective
-        re_reward += self._reward_objective_proximity(prospective_location=prospective_location)
+        # re_reward += self._reward_objective_proximity(prospective_location=prospective_location)
         
+        # print(f"objective statuses: {self.objective_statuses}")
         # Small reward for accomplishing sub-goal state
         # reward for putting out fire
         reward_smooth_factor = 1
-        if self.objective_states["no-fire"] == ObjectiveStatus.REACHED_THIS_FRAME:
-            print("Giving reward for putting out fire")
+
+        if self.goal_states[GoalState.IN_BOAT.value] and self.objective_statuses[GoalState.IN_BOAT.value] == ObjectiveStatus.REACHED_THIS_FRAME:
             re_reward += 50
-        elif self.objective_states["no-fire"] == ObjectiveStatus.REACHED_PAST:
-            re_reward += max(10 - (self.steps_since_completion["no-fire"] * reward_smooth_factor), 0)
+        elif self.goal_states[GoalState.IN_BOAT.value] and self.objective_statuses[GoalState.IN_BOAT.value] == ObjectiveStatus.REACHED_PAST:
+            re_reward += max(10 - (self.steps_since_completion[GoalState.IN_BOAT.value] * reward_smooth_factor), 0)
+
+        if self.goal_states[GoalState.NO_FIRE.value] and self.objective_statuses[GoalState.NO_FIRE.value] == ObjectiveStatus.REACHED_THIS_FRAME:
+            re_reward += 50
+        elif self.goal_states[GoalState.NO_FIRE.value] and self.objective_statuses[GoalState.NO_FIRE.value] == ObjectiveStatus.REACHED_PAST:
+            re_reward += max(10 - (self.steps_since_completion[GoalState.NO_FIRE.value] * reward_smooth_factor), 0)
 
         # reward for picking up sword
-        if self.objective_states["has-sword"] == ObjectiveStatus.REACHED_THIS_FRAME:
-            print("Giving reward for picking up sword")
+        if self.goal_states[GoalState.HAS_SWORD.value] and self.objective_statuses[GoalState.HAS_SWORD.value] == ObjectiveStatus.REACHED_THIS_FRAME:
             re_reward += 50
-        elif self.objective_states["has-sword"] == ObjectiveStatus.REACHED_PAST:
-            re_reward += max(10 - (self.steps_since_completion["has-sword"] * reward_smooth_factor), 0)
+        elif self.goal_states[GoalState.HAS_SWORD.value] and self.objective_statuses[GoalState.HAS_SWORD.value] == ObjectiveStatus.REACHED_PAST:
+            re_reward += max(10 - (self.steps_since_completion[GoalState.HAS_SWORD.value] * reward_smooth_factor), 0)
 
         # reward for killing dragon
-        if self.objective_states["no-dragon"] == ObjectiveStatus.REACHED_THIS_FRAME:
-            print("Giving reward for killing dragon")
+        if self.goal_states[GoalState.HAS_SWORD.value] and self.objective_statuses[GoalState.NO_DRAGON.value] == ObjectiveStatus.REACHED_THIS_FRAME:
             re_reward += 50
-        elif self.objective_states["no-dragon"] == ObjectiveStatus.REACHED_PAST:
-            re_reward += max(10 - (self.steps_since_completion["no-dragon"] * reward_smooth_factor), 0)
+        elif self.goal_states[GoalState.HAS_SWORD.value] and self.objective_statuses[GoalState.NO_DRAGON.value] == ObjectiveStatus.REACHED_PAST:
+            re_reward += max(10 - (self.steps_since_completion[GoalState.HAS_SWORD.value] * reward_smooth_factor), 0)
 
         # Small penalty for attempting to move into impassable terrain
         if not valid_action:
@@ -367,23 +391,37 @@ class VillageSafeEnv(gym.Env):
 
     def _reward_objective_proximity(self, prospective_location):
         objective_location = None
+        # print(f"Current objective: {self.current_objective}")
         if self.current_objective == GoalState.NO_FIRE:
             objective_location = self.mermaid_location
         elif self.current_objective == GoalState.HAS_SWORD:
             objective_location = self.sword_location
         elif self.current_objective == GoalState.NO_DRAGON:
             objective_location = self.dragon_location
+        elif self.current_objective == GoalState.IN_BOAT:
+            objective_location = self.boat_location
             # reward moving towards dragon
         past_distance = np.linalg.norm(np.array(self._agent_location) - np.array(objective_location)) 
         new_distance =  np.linalg.norm(np.array(prospective_location) - np.array(objective_location))
 
         distance_delta = past_distance - new_distance
-        print(f"Distance delta: {distance_delta}")
-        if distance_delta > 0.75:
+        # print(f"Distance delta: {distance_delta}")
+        if distance_delta > 0.4:
             return 3
-        elif distance_delta < 0:
+        elif distance_delta < -0.4:
             return -3
         return 0
+    
+    def _determine_start_state(self):
+        self.has_sword = 0
+        if self.goal_states[GoalState.IN_BOAT.value]:
+            return StartState.BOAT
+        elif self.goal_states[GoalState.NO_FIRE.value]:
+            return StartState.MERMAID
+        elif self.goal_states[GoalState.HAS_SWORD.value]:
+            return StartState.SWORD
+        self.has_sword = 1
+        return StartState.DRAGON
     
     def _load_sprites(self):
         # Load sprites
@@ -543,6 +581,11 @@ class VillageSafeEnv(gym.Env):
                 (self.window_size - 12.5, self.window_size - 12.5),
                 12.5,
             )
+        # display current objective
+        # font = pygame.font.Font(None, 36)
+        # text = font.render(f"Objective: {self.current_objective}", True, (0, 0, 0))
+        # canvas.blit(text, (0, 0))
+
 
         if self.render_mode == "human" and self.window is not None:
             # The following line copies our drawings from `canvas` to the visible window
@@ -558,6 +601,7 @@ class VillageSafeEnv(gym.Env):
             return np.transpose(
                 np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
             )
+        
 
     def _print_actions_debug(self, message):
         if self.print["actions"]:
