@@ -77,7 +77,7 @@ with open ("hyperparameters_record.csv", mode="a", newline="") as file:
     writer.writerow(ppo_hyperparameters)
 
 print("Training model")
-model.learn(total_timesteps=2e6)
+model.learn(total_timesteps=5e6)
 
 model.save(f"LargerNet_15x15_naiveRewards_PPO_village_safe_{run_id}")
 

@@ -34,23 +34,10 @@
 
 (defparameter *dragon-ops*
   (list
+
     (make-op 
       :action 'goto-boat
-      :preconds '(off-boat)
-      :add-list '(on-boat)
-      :del '(off-boat))
-
-    (make-op
-      :action 'leave-boat
-      :preconds '(on-boat)
-      :add-list '(off-boat)
-      :del-list '(on-boat))
-
-    (make-op
-      :action 'goto-mermaid-ocean
-      :preconds '(on-boat mermaid-in-ocean)
-      :add-list '(fire-extinguished)
-      :del-list '(forest-on-fire))
+      :add-list '(boat-boarded))
       
     (make-op 
       :action 'goto-mermaid-beach
@@ -58,16 +45,21 @@
       :add-list '(fire-extinguished)
       :del-list '(forest-on-fire))
 
+    (make-op
+      :action 'goto-mermaid-ocean
+      :preconds '(boat-boarded mermaid-in-ocean)
+      :add-list '(fire-extinguished)
+      :del-list '(forest-on-fire))
 
     (make-op 
       :action 'goto-sword
-      :preconds '(off-boat fire-extinguished)
+      :preconds '(fire-extinguished)
       :add-list '(has-sword)
       :del-list '(sword-in-forest))
 
     (make-op 
       :action 'goto-dragon
-      :preconds '(off-boat has-sword)
+      :preconds '(has-sword)
       :add-list '(no-dragon)
       :del-list '(dragon-alive))
     )

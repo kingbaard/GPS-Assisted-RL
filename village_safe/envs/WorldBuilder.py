@@ -1,4 +1,4 @@
-from .env_enums import Zone, Terrain, GameObject, StartState
+from .env_enums import ObservationMap, Zone, Terrain, GameObject, StartState
 import numpy as np
 from .Tile import Tile
 
@@ -46,6 +46,22 @@ class WorldBuilder:
             else:
                 self._populate_zone_tiles(zone_offset, Terrain.GRASSLAND)
         self._populate_beach_tiles()
+
+    def get_observation_map(self):
+        object_map = np.zeros((self.size, self.size)).astype(np.int32)
+        for i in range(self.size):
+            for j in range(self.size):
+                if self.map[i][j].object == GameObject.FIRE:
+                    object_map[i][j] = ObservationMap.FIRE.value
+                elif self.map[i][j].object == GameObject.SWORD:
+                    object_map[i][j] = ObservationMap.SWORD.value
+                elif self.map[i][j].object == GameObject.ROCK:
+                    object_map[i][j] = ObservationMap.ROCK.value
+                elif self.map[i][j].terrain == Terrain.OCEAN:
+                    object_map[i][j] = ObservationMap.WATER.value
+                else:
+                    object_map[i][j] = ObservationMap.NOTHING.value
+        return object_map
 
     def return_object_coords(self):
         return self.boat_coords, self.mermaid_coords, self.sword_coords, self.dragon_coords, self.fire_coords

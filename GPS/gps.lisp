@@ -51,13 +51,15 @@
   (let ((state2 (achieve-all state (op-preconds op) 
                              (cons goal goal-stack))))
     (unless (null state2)
-      ;; Return an updated state
-      (dbg-indent :gps (length goal-stack) "Action: ~a" (op-action op))
-      (append (remove-if #'(lambda (x) 
-                             (member-equal x (op-del-list op)))
-                         state2)
-              (op-add-list op)))))
-
+      ;; Ensure no locked facts are removed
+      (let ((updated-state
+             (append (remove-if #'(lambda (x) 
+                                    (and (member-equal x (op-del-list op))
+                                         (not (member-equal x '(fire-extinguished on-boat)))))
+                                state2)
+                     (op-add-list op))))
+        (dbg-indent :gps (length goal-stack) "Action: ~a" (op-action op))
+        updated-state))))
 (defun appropriate-p (goal op)
   "An op is appropriate to a goal if it is in its add list."
   (member-equal goal (op-add-list op)))
